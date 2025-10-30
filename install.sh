@@ -279,7 +279,7 @@ install_derper() {
 
     set_go_proxy
 
-    local version_suffix="latest"
+    local version_suffix="@latest"
     if [[ "$DERPER_VERSION" != "latest" ]]; then
         version_suffix="@v${DERPER_VERSION}"
         print_info "安装 derper 版本: ${DERPER_VERSION}"
