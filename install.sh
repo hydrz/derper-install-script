@@ -167,12 +167,10 @@ get_latest_go_version() {
     local version=$(curl -sL --max-time 10 https://golang.google.cn/VERSION?m=text 2>/dev/null | head -n1)
 
     if [[ -z "$version" ]]; then
-        print_warn "无法获取最新 Go 版本，使用回退版本 1.25.3"
         echo "1.25.3"
     else
         # Remove "go" prefix if present
         version="${version#go}"
-        print_info "最新 Go 版本: $version"
         echo "$version"
     fi
 }
