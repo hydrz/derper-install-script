@@ -4,15 +4,25 @@
 ## 功能特性
 
 ✅ **自动下载和安装临时 Go 环境**
+
 ✅ **从源码编译最新版本的 derper**
+
 ✅ **安装后自动清理临时文件**
+
 ✅ **创建专用系统用户**
+
 ✅ **支持通过命令行参数配置**
+
 ✅ **配置保存在 `/etc/default/derper`**
+
 ✅ **systemd 服务管理**
+
 ✅ **安全加固（最小权限、隔离等）**
+
 ✅ **自动重启策略**
+
 ✅ **支持 LetsEncrypt 和手动证书模式**
+
 
 ## 使用说明
 
@@ -20,41 +30,46 @@
 
 使用 LetsEncrypt 自动证书：
 ```bash
-curl https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/main/install.sh  | sudo bash -s - --hostname derp.example.com
+curl https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh  | sudo bash -s - --hostname derp.example.com
 ```
+
 
 ### 高级配置示例
 
 1. **使用手动证书模式**：
 ```bash
-curl https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/main/install.sh  | sudo bash -s -  \
+curl https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh  | sudo bash -s -  \
   --hostname derp.example.com \
   --certmode manual \
   --port 8443
 ```
 
+
 2. **禁用 STUN，使用自定义端口**：
 ```bash
-curl https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/main/install.sh  | sudo bash -s -  \
+curl https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh  | sudo bash -s -  \
   --hostname derp.example.com \
   --no-stun \
   --port 8443 \
   --http-port 8080
 ```
 
+
 3. **启用客户端验证**：
 ```bash
-curl https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/main/install.sh  | sudo bash -s -  \
+curl https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh  | sudo bash -s -  \
   --hostname derp.example.com \
   --verify-clients
 ```
 
+
 4. **传递额外参数**：
 ```bash
-curl https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/main/install.sh  | sudo bash -s -  \
+curl https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh  | sudo bash -s -  \
   --hostname derp.example.com \
   --extra-args "-mesh-with derp1.example.com,derp2.example.com"
 ```
+
 
 ### 管理服务
 

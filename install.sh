@@ -143,9 +143,27 @@ detect_arch() {
     esac
 }
 
+# Get latest Go version from official website
+get_latest_go_version() {
+    print_info "Fetching latest Go version..."
+
+    # Try to get the latest stable version from Go download page
+    local version=$(curl -sL https://go.dev/VERSION?m=text | head -n1)
+
+    if [[ -z "$version" ]]; then
+        print_warn "Failed to fetch latest Go version, using fallback version 1.25.3"
+        echo "1.25.3"
+    else
+        # Remove "go" prefix if present
+        version="${version#go}"
+        print_info "Latest Go version: $version"
+        echo "$version"
+    fi
+}
+
 # Download and setup temporary Go
 setup_temp_go() {
-    local go_version="1.23.2"
+    local go_version=$(get_latest_go_version)
     local arch=$(detect_arch)
     local go_tarball="go${go_version}.linux-${arch}.tar.gz"
     local temp_dir="/tmp/derper-install-$$"
@@ -155,11 +173,15 @@ setup_temp_go() {
     cd "$temp_dir"
 
     print_info "Downloading Go ${go_version} for ${arch}..."
-    wget -q --show-progress "https://go.dev/dl/${go_tarball}" || {
-        print_error "Failed to download Go"
-        cleanup_temp "$temp_dir"
-        exit 1
-    }
+    if ! wget -q --show-progress "https://go.dev/dl/${go_tarball}"; then
+        print_error "Failed to download Go ${go_version}"
+        print_info "Trying to download from Google CDN..."
+        if ! wget -q --show-progress "https://golang.google.cn/dl/${go_tarball}"; then
+            print_error "Failed to download Go from all sources"
+            cleanup_temp "$temp_dir"
+            exit 1
+        fi
+    fi
 
     print_info "Extracting Go..."
     tar -xzf "$go_tarball"
@@ -175,10 +197,19 @@ setup_temp_go() {
 install_derper() {
     print_info "Installing derper from source..."
 
-    go install tailscale.com/cmd/derper@latest || {
+    # Set Go environment for faster downloads in China
+    export GOPROXY="https://proxy.golang.org,direct"
+    export GOSUMDB="sum.golang.org"
+
+    if ! go install tailscale.com/cmd/derper@latest; then
         print_error "Failed to install derper"
-        exit 1
-    }
+        print_info "Trying with China proxy..."
+        export GOPROXY="https://goproxy.cn,direct"
+        if ! go install tailscale.com/cmd/derper@latest; then
+            print_error "Failed to install derper from all sources"
+            exit 1
+        fi
+    fi
 
     print_info "Copying derper binary to /usr/local/bin..."
     cp "$GOPATH/bin/derper" /usr/local/bin/derper
