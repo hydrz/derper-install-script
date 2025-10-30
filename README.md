@@ -70,6 +70,20 @@ curl https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh  | su
   --extra-args "-mesh-with derp1.example.com,derp2.example.com"
 ```
 
+5. **安装指定版本**：
+```bash
+curl https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh  | sudo bash -s - \
+  --hostname derp.example.com \
+  -v 1.90.4
+```
+
+6. **同时安装 tailscaled**：
+```bash
+curl https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh  | sudo bash -s - \
+  --hostname derp.example.com \
+  --install-tailscaled
+```
+
 
 ### 管理服务
 
