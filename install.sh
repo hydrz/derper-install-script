@@ -5,7 +5,11 @@ set -e
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+
+# Script version
+VERSION="2.1.0"
 
 # Default values
 DERPER_PORT="443"
@@ -21,6 +25,8 @@ USE_ALIYUN_INTERNAL="false"
 INSTALL_TAILSCALED="false"
 TAILSCALE_VERSION="latest"
 DERPER_VERSION="latest"
+UNINSTALL_MODE="false"
+KEEP_DATA="false"
 
 # Print colored message
 print_info() {
@@ -35,49 +41,77 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+print_step() {
+    echo -e "${BLUE}[STEP]${NC} $1"
+}
+
+# Show banner
+show_banner() {
+    cat << "EOF"
+    ____                              ____           __        ____
+   / __ \___  _________  ___  _____  /  _/___  _____/ /_____ _/ / /__  _____
+  / / / / _ \/ ___/ __ \/ _ \/ ___/  / // __ \/ ___/ __/ __ `/ / / _ \/ ___/
+ / /_/ /  __/ /  / /_/ /  __/ /    _/ // / / (__  ) /_/ /_/ / / /  __/ /
+/_____/\___/_/  / .___/\___/_/    /___/_/ /_/____/\__/\__,_/_/_/\___/_/
+               /_/
+
+EOF
+    echo -e "${GREEN}Derper 安装脚本 v${VERSION}${NC}"
+    echo -e "${BLUE}https://github.com/hydrz/derper-install-script${NC}"
+    echo ""
+}
+
 # Show usage
 usage() {
     cat << EOF
-使用方法: $0 [选项]
+使用方法: curl -fsSL https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh | sudo bash -s - [选项]
 
-安装 Derper 服务器并配置为 systemd 服务。
+一键安装 Tailscale DERP 服务器的自动化脚本。
 
 选项:
     -h, --help                  显示帮助信息
     --port PORT                 HTTPS 监听端口 (默认: 443)
     --http-port PORT            HTTP 端口 (默认: 80)
     --stun-port PORT            STUN UDP 端口 (默认: 3478)
-    --hostname HOSTNAME         LetsEncrypt 域名
-    --workdir DIR               工作目录，存储 derper.key 和证书 (默认: /var/lib/derper)
+    --hostname HOSTNAME         LetsEncrypt 域名 (必需)
+    --workdir DIR               工作目录 (默认: /var/lib/derper)
     --certmode MODE             证书模式: letsencrypt 或 manual (默认: letsencrypt)
     --no-stun                   禁用 STUN 服务器
     --verify-clients            启用客户端验证（需要本地 tailscaled）
     --extra-args "ARGS"         传递给 derper 的额外参数
-    --aliyun-internal           使用阿里云 ECS 内网镜像 (mirrors.cloud.aliyuncs.com)
+    --aliyun-internal           使用阿里云 ECS 内网镜像
     --install-tailscaled        同时安装 tailscaled
-    -v VER                      指定 Derper 与 Tailscale 版本 (默认: latest)
+    -v VER                      指定版本 (默认: latest)
+    --uninstall                 卸载服务
+    --keep-data                 卸载时保留数据
 
-示例:
-    # 基础安装，使用 LetsEncrypt
-    $0 --hostname derp.example.com
+快速开始:
+    # 基础安装
+    curl -fsSL https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh | sudo bash -s - --hostname derp.example.com
 
-    # 在阿里云 ECS 上安装（使用内网镜像）
-    $0 --hostname derp.example.com --aliyun-internal
+    # 阿里云 ECS 安装
+    curl -fsSL https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh | sudo bash -s - --hostname derp.example.com --aliyun-internal
 
-    # 安装指定版本的 derper
-    $0 --hostname derp.example.com -v 1.90.4
+    # 安装指定版本
+    curl -fsSL https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh | sudo bash -s - --hostname derp.example.com -v 1.90.4
 
     # 同时安装 tailscaled
-    $0 --hostname derp.example.com --install-tailscaled
+    curl -fsSL https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh | sudo bash -s - --hostname derp.example.com --install-tailscaled
 
-    # 安装指定版本的 tailscaled 和 derper
-    $0 --hostname derp.example.com --install-tailscaled -v 1.90.4
+    # 卸载
+    curl -fsSL https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh | sudo bash -s - --uninstall
 
-    # 手动证书模式
-    $0 --hostname derp.example.com --certmode manual --port 8443
+本地安装:
+    # 下载脚本
+    wget https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh
+    chmod +x install.sh
 
-    # 禁用 STUN 并使用自定义端口
-    $0 --hostname derp.example.com --no-stun --port 8443 --http-port 8080
+    # 运行安装
+    sudo ./install.sh --hostname derp.example.com
+
+更多信息:
+    GitHub: https://github.com/hydrz/derper-install-script
+    文档: https://github.com/hydrz/derper-install-script/blob/main/README.md
 
 EOF
     exit 0
@@ -134,13 +168,22 @@ parse_args() {
                 INSTALL_TAILSCALED="true"
                 shift
                 ;;
-			 -v)
-				DERPER_VERSION="$2"
-				TAILSCALE_VERSION="$2"
-				shift 2
-				;;
+            -v)
+                DERPER_VERSION="$2"
+                TAILSCALE_VERSION="$2"
+                shift 2
+                ;;
+            --uninstall)
+                UNINSTALL_MODE="true"
+                shift
+                ;;
+            --keep-data)
+                KEEP_DATA="true"
+                shift
+                ;;
             *)
                 print_error "未知选项: $1"
+                echo ""
                 usage
                 ;;
         esac
@@ -151,8 +194,153 @@ parse_args() {
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         print_error "此脚本必须以 root 权限运行"
+        echo ""
+        echo "请使用以下方式运行:"
+        echo "  curl -fsSL https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh | sudo bash -s - --hostname derp.example.com"
         exit 1
     fi
+}
+
+# Check hostname
+check_hostname() {
+    if [[ "$UNINSTALL_MODE" == "true" ]]; then
+        return
+    fi
+
+    if [[ -z "$DERPER_HOSTNAME" ]]; then
+        print_error "未指定域名"
+        echo ""
+        echo "请使用 --hostname 参数指定域名:"
+        echo "  curl -fsSL https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh | sudo bash -s - --hostname derp.example.com"
+        exit 1
+    fi
+}
+
+# Uninstall derper and tailscaled
+uninstall_services() {
+    print_step "开始卸载 Derper 和 Tailscaled..."
+    echo ""
+
+    # Confirm uninstallation
+    if [[ "$KEEP_DATA" != "true" ]]; then
+        print_warn "警告: 此操作将删除所有数据和配置文件！"
+        read -p "确认卸载？ (yes/no): " confirm
+        if [[ "$confirm" != "yes" ]]; then
+            print_info "取消卸载"
+            exit 0
+        fi
+    fi
+
+    # Stop and disable derper service
+    if systemctl is-active --quiet derper 2>/dev/null; then
+        print_info "停止 derper 服务..."
+        systemctl stop derper
+    fi
+
+    if systemctl is-enabled --quiet derper 2>/dev/null; then
+        print_info "禁用 derper 服务..."
+        systemctl disable derper
+    fi
+
+    # Stop and disable tailscaled service
+    if systemctl is-active --quiet tailscaled 2>/dev/null; then
+        print_info "停止 tailscaled 服务..."
+        systemctl stop tailscaled
+    fi
+
+    if systemctl is-enabled --quiet tailscaled 2>/dev/null; then
+        print_info "禁用 tailscaled 服务..."
+        systemctl disable tailscaled
+    fi
+
+    # Remove service files
+    if [[ -f /lib/systemd/system/derper.service ]]; then
+        print_info "删除 derper systemd 服务文件..."
+        rm -f /lib/systemd/system/derper.service
+    fi
+
+    if [[ -f /lib/systemd/system/tailscaled.service ]]; then
+        print_info "删除 tailscaled systemd 服务文件..."
+        rm -f /lib/systemd/system/tailscaled.service
+    fi
+
+    # Reload systemd
+    systemctl daemon-reload
+
+    # Remove binaries
+    if [[ -f /usr/local/bin/derper ]]; then
+        print_info "删除 derper 二进制文件..."
+        rm -f /usr/local/bin/derper
+    fi
+
+    if [[ -f /usr/local/bin/tailscale ]]; then
+        print_info "删除 tailscale 二进制文件..."
+        rm -f /usr/local/bin/tailscale
+    fi
+
+    if [[ -f /usr/local/bin/tailscaled ]]; then
+        print_info "删除 tailscaled 二进制文件..."
+        rm -f /usr/local/bin/tailscaled
+    fi
+
+    # Remove or backup data
+    if [[ "$KEEP_DATA" == "true" ]]; then
+        print_info "保留配置文件和数据目录"
+        echo "  配置文件: /etc/default/derper"
+        echo "  数据目录: $DERPER_WORKDIR"
+        echo "  数据目录: /var/lib/tailscale"
+    else
+        # Remove configuration files
+        if [[ -f /etc/default/derper ]]; then
+            print_info "删除 derper 配置文件..."
+            rm -f /etc/default/derper
+        fi
+
+        if [[ -f /etc/default/tailscaled ]]; then
+            print_info "删除 tailscaled 配置文件..."
+            rm -f /etc/default/tailscaled
+        fi
+
+        # Remove data directories
+        if [[ -d "$DERPER_WORKDIR" ]]; then
+            print_info "删除 derper 数据目录..."
+            rm -rf "$DERPER_WORKDIR"
+        fi
+
+        if [[ -d /var/lib/tailscale ]]; then
+            print_info "删除 tailscale 数据目录..."
+            rm -rf /var/lib/tailscale
+        fi
+
+        if [[ -d /var/log/derper ]]; then
+            print_info "删除 derper 日志目录..."
+            rm -rf /var/log/derper
+        fi
+
+        # Remove user
+        if id -u derper >/dev/null 2>&1; then
+            print_info "删除 derper 用户..."
+            userdel derper 2>/dev/null || true
+        fi
+    fi
+
+    echo ""
+    print_info "===== 卸载完成 ====="
+    echo ""
+
+    if [[ "$KEEP_DATA" == "true" ]]; then
+        echo "已保留以下文件和目录："
+        echo "  - /etc/default/derper"
+        echo "  - $DERPER_WORKDIR"
+        echo "  - /var/lib/tailscale"
+        echo ""
+        echo "如需完全删除，请手动运行："
+        echo "  sudo rm -rf /etc/default/derper $DERPER_WORKDIR /var/lib/tailscale /var/log/derper"
+        echo "  sudo userdel derper"
+    else
+        echo "已完全卸载 Derper 和 Tailscaled"
+    fi
+    echo ""
 }
 
 # Detect architecture
@@ -197,6 +385,8 @@ get_latest_go_version() {
 
 # Download and setup temporary Go
 setup_temp_go() {
+    print_step "设置 Go 编译环境..."
+
     local go_version=$(get_latest_go_version)
     local arch=$(detect_arch)
     local go_tarball="go${go_version}.linux-${arch}.tar.gz"
@@ -259,6 +449,7 @@ setup_temp_go() {
     export GOPATH="$temp_dir/gopath"
 
     print_info "Go 版本: $(go version)"
+    echo ""
 }
 
 # Set Go proxy
@@ -275,7 +466,7 @@ set_go_proxy() {
 
 # Install derper
 install_derper() {
-    print_info "从源码安装 derper..."
+    print_step "安装 Derper..."
 
     set_go_proxy
 
@@ -302,6 +493,7 @@ install_derper() {
     chmod +x /usr/local/bin/derper
 
     print_info "Derper 版本: $(/usr/local/bin/derper -version)"
+    echo ""
 }
 
 # Install tailscaled
@@ -310,11 +502,11 @@ install_tailscaled() {
         return
     fi
 
-    print_info "安装 tailscaled..."
+    print_step "安装 Tailscaled..."
 
     set_go_proxy
 
-    local version_suffix=""
+    local version_suffix="@latest"
     if [[ "$TAILSCALE_VERSION" != "latest" ]]; then
         version_suffix="@v${TAILSCALE_VERSION}"
         print_info "安装 tailscale 版本: ${TAILSCALE_VERSION}"
@@ -345,6 +537,7 @@ install_tailscaled() {
     chmod +x /usr/local/bin/tailscaled
 
     print_info "Tailscale 版本: $(/usr/local/bin/tailscale version)"
+    echo ""
 
     # Create tailscaled systemd service
     create_tailscaled_service
@@ -365,8 +558,8 @@ After=network-pre.target NetworkManager.service systemd-resolved.service
 
 [Service]
 EnvironmentFile=/etc/default/tailscaled
-ExecStart=/usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=${PORT} $FLAGS
-ExecStopPost=/usr/sbin/tailscaled --cleanup
+ExecStart=/usr/local/bin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=${PORT} $FLAGS
+ExecStopPost=/usr/local/bin/tailscaled --cleanup
 
 Restart=on-failure
 
@@ -383,6 +576,13 @@ WantedBy=multi-user.target
 EOF
 
     chmod 644 /lib/systemd/system/tailscaled.service
+
+    # Create tailscaled config
+    cat > /etc/default/tailscaled << 'EOF'
+# Tailscaled configuration
+PORT=41641
+FLAGS=""
+EOF
 
     systemctl daemon-reload
     systemctl enable tailscaled
@@ -406,6 +606,8 @@ cleanup_temp() {
 
 # Create derper user
 create_user() {
+    print_step "配置系统用户和目录..."
+
     if ! id -u derper >/dev/null 2>&1; then
         print_info "创建 derper 用户..."
         useradd -r -s /bin/false -d "$DERPER_WORKDIR" derper
@@ -424,11 +626,12 @@ create_directories() {
 
     chown -R derper:derper "$DERPER_WORKDIR"
     chown -R derper:derper /var/log/derper
+    echo ""
 }
 
 # Create configuration file
 create_config() {
-    print_info "创建配置文件 /etc/default/derper..."
+    print_step "生成配置文件..."
 
     cat > /etc/default/derper << EOF
 # Derper server configuration
@@ -463,11 +666,13 @@ DERPER_EXTRA_ARGS="${DERPER_EXTRA_ARGS}"
 EOF
 
     chmod 644 /etc/default/derper
+    print_info "配置文件已保存到: /etc/default/derper"
+    echo ""
 }
 
 # Create systemd service
 create_service() {
-    print_info "创建 systemd 服务..."
+    print_step "创建 systemd 服务..."
 
     cat > /lib/systemd/system/derper.service << 'EOF'
 [Unit]
@@ -523,10 +728,14 @@ WantedBy=multi-user.target
 EOF
 
     chmod 644 /lib/systemd/system/derper.service
+    print_info "systemd 服务文件已创建"
+    echo ""
 }
 
 # Enable and start service
 enable_service() {
+    print_step "启动 Derper 服务..."
+
     print_info "重新加载 systemd 守护进程..."
     systemctl daemon-reload
 
@@ -544,47 +753,51 @@ enable_service() {
         print_error "Derper 服务启动失败，请查看日志: journalctl -u derper -f"
         exit 1
     fi
+    echo ""
 }
 
 # Show firewall rules
 show_firewall_info() {
-    print_info "防火墙配置说明："
+    print_step "防火墙配置说明"
     echo ""
-    echo "  UFW 防火墙："
-    echo "    sudo ufw allow ${DERPER_PORT}/tcp"
+    echo "请根据您的防火墙类型选择以下命令："
+    echo ""
+    echo "${YELLOW}UFW 防火墙:${NC}"
+    echo "  sudo ufw allow ${DERPER_PORT}/tcp"
     if [[ "$DERPER_HTTP_PORT" != "-1" ]]; then
-        echo "    sudo ufw allow ${DERPER_HTTP_PORT}/tcp"
+        echo "  sudo ufw allow ${DERPER_HTTP_PORT}/tcp"
     fi
     if [[ "$DERPER_STUN" == "true" ]]; then
-        echo "    sudo ufw allow ${DERPER_STUN_PORT}/udp"
+        echo "  sudo ufw allow ${DERPER_STUN_PORT}/udp"
     fi
     if [[ "$INSTALL_TAILSCALED" == "true" ]]; then
-        echo "    sudo ufw allow 41641/udp  # Tailscale"
+        echo "  sudo ufw allow 41641/udp"
     fi
     echo ""
-    echo "  firewalld 防火墙："
-    echo "    sudo firewall-cmd --permanent --add-port=${DERPER_PORT}/tcp"
+    echo "${YELLOW}firewalld 防火墙:${NC}"
+    echo "  sudo firewall-cmd --permanent --add-port=${DERPER_PORT}/tcp"
     if [[ "$DERPER_HTTP_PORT" != "-1" ]]; then
-        echo "    sudo firewall-cmd --permanent --add-port=${DERPER_HTTP_PORT}/tcp"
+        echo "  sudo firewall-cmd --permanent --add-port=${DERPER_HTTP_PORT}/tcp"
     fi
     if [[ "$DERPER_STUN" == "true" ]]; then
-        echo "    sudo firewall-cmd --permanent --add-port=${DERPER_STUN_PORT}/udp"
+        echo "  sudo firewall-cmd --permanent --add-port=${DERPER_STUN_PORT}/udp"
     fi
     if [[ "$INSTALL_TAILSCALED" == "true" ]]; then
-        echo "    sudo firewall-cmd --permanent --add-port=41641/udp  # Tailscale"
+        echo "  sudo firewall-cmd --permanent --add-port=41641/udp"
     fi
-    echo "    sudo firewall-cmd --reload"
+    echo "  sudo firewall-cmd --reload"
     echo ""
-    echo "  阿里云安全组："
-    echo "    需要在控制台开放 TCP ${DERPER_PORT}"
+    echo "${YELLOW}阿里云/腾讯云安全组:${NC}"
+    echo "  需要在云控制台开放以下端口："
+    echo "  - TCP ${DERPER_PORT}"
     if [[ "$DERPER_HTTP_PORT" != "-1" ]]; then
-        echo "    需要在控制台开放 TCP ${DERPER_HTTP_PORT}"
+        echo "  - TCP ${DERPER_HTTP_PORT}"
     fi
     if [[ "$DERPER_STUN" == "true" ]]; then
-        echo "    需要在控制台开放 UDP ${DERPER_STUN_PORT}"
+        echo "  - UDP ${DERPER_STUN_PORT}"
     fi
     if [[ "$INSTALL_TAILSCALED" == "true" ]]; then
-        echo "    需要在控制台开放 UDP 41641 (Tailscale)"
+        echo "  - UDP 41641"
     fi
     echo ""
 }
@@ -592,58 +805,86 @@ show_firewall_info() {
 # Show final information
 show_final_info() {
     echo ""
-    print_info "===== 安装完成 ====="
-    echo ""
-    echo "Derper 已成功安装并启动！"
-    echo ""
-    echo "配置文件: /etc/default/derper"
-    echo "工作目录: $DERPER_WORKDIR"
-    echo "服务状态: systemctl status derper"
-    echo "查看日志: journalctl -u derper -f"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    print_info "✅ 安装完成！"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 
-    if [[ -n "$DERPER_HOSTNAME" ]]; then
-        echo "服务器域名: $DERPER_HOSTNAME"
-    fi
-    echo "HTTPS 端口: $DERPER_PORT"
+    echo "${GREEN}📋 服务信息:${NC}"
+    echo "  服务器域名: ${BLUE}${DERPER_HOSTNAME}${NC}"
+    echo "  HTTPS 端口: ${BLUE}${DERPER_PORT}${NC}"
     if [[ "$DERPER_HTTP_PORT" != "-1" ]]; then
-        echo "HTTP 端口: $DERPER_HTTP_PORT"
+        echo "  HTTP 端口:  ${BLUE}${DERPER_HTTP_PORT}${NC}"
     fi
     if [[ "$DERPER_STUN" == "true" ]]; then
-        echo "STUN 端口: $DERPER_STUN_PORT (UDP)"
+        echo "  STUN 端口:  ${BLUE}${DERPER_STUN_PORT}${NC} (UDP)"
     fi
+    echo ""
+
+    echo "${GREEN}📁 文件位置:${NC}"
+    echo "  配置文件: ${BLUE}/etc/default/derper${NC}"
+    echo "  工作目录: ${BLUE}${DERPER_WORKDIR}${NC}"
+    echo "  日志目录: ${BLUE}/var/log/derper${NC}"
+    echo ""
+
+    echo "${GREEN}🔧 常用命令:${NC}"
+    echo "  查看状态: ${BLUE}systemctl status derper${NC}"
+    echo "  查看日志: ${BLUE}journalctl -u derper -f${NC}"
+    echo "  重启服务: ${BLUE}systemctl restart derper${NC}"
+    echo "  停止服务: ${BLUE}systemctl stop derper${NC}"
+    echo ""
 
     if [[ "$INSTALL_TAILSCALED" == "true" ]]; then
+        echo "${GREEN}🌐 Tailscaled 信息:${NC}"
+        echo "  查看状态: ${BLUE}systemctl status tailscaled${NC}"
+        echo "  连接网络: ${BLUE}tailscale up${NC}"
+        echo "  查看状态: ${BLUE}tailscale status${NC}"
+        echo "  查看 IP:  ${BLUE}tailscale ip${NC}"
         echo ""
-        echo "Tailscaled 已安装："
-        echo "  服务状态: systemctl status tailscaled"
-        echo "  连接网络: tailscale up"
-        echo "  查看状态: tailscale status"
-        echo "  查看日志: journalctl -u tailscaled -f"
     fi
-
-    echo ""
 
     show_firewall_info
 
+    echo "${GREEN}📖 更多信息:${NC}"
+    echo "  重新配置:"
+    echo "    1. 编辑配置文件: ${BLUE}sudo nano /etc/default/derper${NC}"
+    echo "    2. 重启服务: ${BLUE}sudo systemctl restart derper${NC}"
     echo ""
-    echo "重新配置 derper:"
-    echo "  1. 编辑 /etc/default/derper"
-    echo "  2. 运行: systemctl restart derper"
+    echo "  卸载服务:"
+    echo "    ${BLUE}curl -fsSL https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh | sudo bash -s - --uninstall${NC}"
+    echo ""
+    echo "  文档和支持:"
+    echo "    GitHub: ${BLUE}https://github.com/hydrz/derper-install-script${NC}"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 }
 
 # Main installation process
 main() {
+    # Show banner
+    show_banner
+
+    # Parse arguments
     parse_args "$@"
 
-    print_info "开始安装 Derper..."
+    # Check root
+    check_root
+
+    # Handle uninstall mode
+    if [[ "$UNINSTALL_MODE" == "true" ]]; then
+        uninstall_services
+        exit 0
+    fi
+
+    # Check hostname
+    check_hostname
+
+    print_info "开始安装 Derper v${VERSION}..."
     if [[ "$INSTALL_TAILSCALED" == "true" ]]; then
         print_info "同时安装 Tailscaled..."
     fi
     echo ""
-
-    check_root
 
     local temp_dir="/tmp/derper-install-$$"
 
