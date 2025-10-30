@@ -13,7 +13,7 @@ DERPER_HTTP_PORT="80"
 DERPER_STUN_PORT="3478"
 DERPER_HOSTNAME=""
 DERPER_CERTMODE="letsencrypt"
-DERPER_CERTDIR="/var/lib/derper/certs"
+DERPER_WORKDIR="/var/lib/derper"
 DERPER_STUN="true"
 DERPER_VERIFY_CLIENTS="false"
 DERPER_EXTRA_ARGS=""
@@ -45,8 +45,8 @@ OPTIONS:
     --http-port PORT            HTTP port (default: 80)
     --stun-port PORT            STUN UDP port (default: 3478)
     --hostname HOSTNAME         Server hostname for LetsEncrypt
+	--workdir DIR               Working directory, will create derper.key here and contain certs (default: /var/lib/derper)
     --certmode MODE             Certificate mode: letsencrypt or manual (default: letsencrypt)
-    --certdir DIR               Directory for certificates (default: /var/lib/derper/certs)
     --no-stun                   Disable STUN server
     --verify-clients            Enable client verification through local tailscaled
     --extra-args "ARGS"         Additional arguments to pass to derper
@@ -92,12 +92,12 @@ parse_args() {
                 DERPER_HOSTNAME="$2"
                 shift 2
                 ;;
+			--workdir)
+				DERPER_WORKDIR="$2"
+				shift 2
+				;;
             --certmode)
                 DERPER_CERTMODE="$2"
-                shift 2
-                ;;
-            --certdir)
-                DERPER_CERTDIR="$2"
                 shift 2
                 ;;
             --no-stun)
@@ -296,13 +296,11 @@ create_user() {
 # Create necessary directories
 create_directories() {
     print_info "创建必要的目录..."
-    mkdir -p "$DERPER_CERTDIR"
     mkdir -p /var/lib/derper
-    mkdir -p /var/log/derper
+    mkdir -p /var/log/derper/{certs,secrets}
 
     chown -R derper:derper /var/lib/derper
     chown -R derper:derper /var/log/derper
-    chown -R derper:derper "$DERPER_CERTDIR"
 }
 
 # Create configuration file
@@ -323,14 +321,14 @@ DERPER_HTTP_PORT="${DERPER_HTTP_PORT}"
 DERPER_STUN="${DERPER_STUN}"
 DERPER_STUN_PORT="${DERPER_STUN_PORT}"
 
+# Working directory
+DERPER_WORKDIR="${DERPER_WORKDIR}"
+
 # Hostname for LetsEncrypt
 DERPER_HOSTNAME="${DERPER_HOSTNAME}"
 
 # Certificate mode: letsencrypt or manual
 DERPER_CERTMODE="${DERPER_CERTMODE}"
-
-# Certificate directory
-DERPER_CERTDIR="${DERPER_CERTDIR}"
 
 # Client verification
 DERPER_VERIFY_CLIENTS="${DERPER_VERIFY_CLIENTS}"
@@ -367,9 +365,11 @@ ExecStart=/bin/bash -c 'exec /usr/local/bin/derper \
     -stun-port ${DERPER_STUN_PORT} \
     ${DERPER_HOSTNAME:+-hostname "${DERPER_HOSTNAME}"} \
     -certmode "${DERPER_CERTMODE}" \
-    -certdir "${DERPER_CERTDIR}" \
+    -certdir "${DERPER_WORKDIR}/certs" \
+	-secrets-cache-dir "${DERPER_WORKDIR}/secrets" \
     ${DERPER_VERIFY_CLIENTS:+-verify-clients="${DERPER_VERIFY_CLIENTS}"} \
-    ${DERPER_EXTRA_ARGS}'
+    ${DERPER_EXTRA_ARGS} \'
+	-c ${DERPER_WORKDIR}/derper.key'
 
 # Restart policy
 Restart=always
