@@ -166,17 +166,11 @@ get_latest_go_version() {
     print_info "获取最新 Go 版本..."
 
     # Try to get the latest stable version from Go download page
-    local version=$(curl -sL --max-time 10 https://go.dev/VERSION?m=text 2>/dev/null | head -n1)
+    local version=$(curl -sL --max-time 10 https://golang.google.cn/VERSION?m=text 2>/dev/null | head -n1)
 
     if [[ -z "$version" ]]; then
-        # Try Aliyun mirror
-        print_warn "从官方源获取失败，尝试从阿里云镜像获取..."
-        version=$(curl -sL --max-time 10 https://mirrors.aliyun.com/golang/VERSION?m=text 2>/dev/null | head -n1)
-    fi
-
-    if [[ -z "$version" ]]; then
-        print_warn "无法获取最新 Go 版本，使用回退版本 1.23.4"
-        echo "1.23.4"
+        print_warn "无法获取最新 Go 版本，使用回退版本 1.25.3"
+        echo "1.25.3"
     else
         # Remove "go" prefix if present
         version="${version#go}"
