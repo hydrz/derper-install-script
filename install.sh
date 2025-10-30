@@ -17,6 +17,7 @@ DERPER_CERTDIR="/var/lib/derper/certs"
 DERPER_STUN="true"
 DERPER_VERIFY_CLIENTS="false"
 DERPER_EXTRA_ARGS=""
+USE_ALIYUN_INTERNAL="false"
 
 # Print colored message
 print_info() {
@@ -49,10 +50,14 @@ OPTIONS:
     --no-stun                   Disable STUN server
     --verify-clients            Enable client verification through local tailscaled
     --extra-args "ARGS"         Additional arguments to pass to derper
+    --aliyun-internal           Use Aliyun ECS internal mirror (mirrors.cloud.aliyuncs.com)
 
 EXAMPLES:
     # Basic installation with LetsEncrypt
     $0 --hostname derp.example.com
+
+    # Installation on Aliyun ECS (use internal mirror)
+    $0 --hostname derp.example.com --aliyun-internal
 
     # Manual certificate mode
     $0 --hostname derp.example.com --certmode manual --port 8443
@@ -107,6 +112,10 @@ parse_args() {
                 DERPER_EXTRA_ARGS="$2"
                 shift 2
                 ;;
+            --aliyun-internal)
+                USE_ALIYUN_INTERNAL="true"
+                shift
+                ;;
             *)
                 print_error "Unknown option: $1"
                 usage
@@ -143,20 +152,35 @@ detect_arch() {
     esac
 }
 
+# Check if running on Aliyun ECS
+is_aliyun_ecs() {
+    # Check if we can access Aliyun metadata service
+    if timeout 2 curl -s http://100.100.100.200/latest/meta-data/instance-id >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
 # Get latest Go version from official website
 get_latest_go_version() {
-    print_info "Fetching latest Go version..."
+    print_info "获取最新 Go 版本..."
 
     # Try to get the latest stable version from Go download page
-    local version=$(curl -sL https://go.dev/VERSION?m=text | head -n1)
+    local version=$(curl -sL --max-time 10 https://go.dev/VERSION?m=text 2>/dev/null | head -n1)
 
     if [[ -z "$version" ]]; then
-        print_warn "Failed to fetch latest Go version, using fallback version 1.25.3"
-        echo "1.25.3"
+        # Try Aliyun mirror
+        print_warn "从官方源获取失败，尝试从阿里云镜像获取..."
+        version=$(curl -sL --max-time 10 https://mirrors.aliyun.com/golang/VERSION?m=text 2>/dev/null | head -n1)
+    fi
+
+    if [[ -z "$version" ]]; then
+        print_warn "无法获取最新 Go 版本，使用回退版本 1.23.4"
+        echo "1.23.4"
     else
         # Remove "go" prefix if present
         version="${version#go}"
-        print_info "Latest Go version: $version"
+        print_info "最新 Go 版本: $version"
         echo "$version"
     fi
 }
@@ -167,61 +191,104 @@ setup_temp_go() {
     local arch=$(detect_arch)
     local go_tarball="go${go_version}.linux-${arch}.tar.gz"
     local temp_dir="/tmp/derper-install-$$"
+    local download_success=false
 
-    print_info "Creating temporary directory..."
+    print_info "创建临时目录..."
     mkdir -p "$temp_dir"
     cd "$temp_dir"
 
-    print_info "Downloading Go ${go_version} for ${arch}..."
-    if ! wget -q --show-progress "https://go.dev/dl/${go_tarball}"; then
-        print_error "Failed to download Go ${go_version}"
-        print_info "Trying to download from Aliyun mirror..."
-        if ! wget -q --show-progress "https://mirrors.aliyun.com/golang/${go_tarball}"; then
-            print_error "Failed to download Go from all sources"
-            cleanup_temp "$temp_dir"
-            exit 1
-        fi
+    print_info "下载 Go ${go_version} for ${arch}..."
+
+    # Determine download sources based on environment
+    local download_sources=()
+
+    if [[ "$USE_ALIYUN_INTERNAL" == "true" ]]; then
+        print_info "使用阿里云 ECS 内网镜像源..."
+        download_sources=(
+            "http://mirrors.cloud.aliyuncs.com/golang/${go_tarball}"
+            "https://mirrors.aliyun.com/golang/${go_tarball}"
+            "https://go.dev/dl/${go_tarball}"
+        )
+    elif is_aliyun_ecs; then
+        print_info "检测到阿里云 ECS 环境，优先使用内网镜像源..."
+        download_sources=(
+            "http://mirrors.cloud.aliyuncs.com/golang/${go_tarball}"
+            "https://mirrors.aliyun.com/golang/${go_tarball}"
+            "https://go.dev/dl/${go_tarball}"
+            "https://golang.google.cn/dl/${go_tarball}"
+        )
+    else
+        download_sources=(
+            "https://go.dev/dl/${go_tarball}"
+            "https://mirrors.aliyun.com/golang/${go_tarball}"
+            "https://golang.google.cn/dl/${go_tarball}"
+        )
     fi
 
-    print_info "Extracting Go..."
+    # Try each download source
+    for source in "${download_sources[@]}"; do
+        print_info "尝试从 $source 下载..."
+        if wget -q --show-progress --timeout=30 --tries=2 "$source"; then
+            download_success=true
+            print_info "下载成功！"
+            break
+        else
+            print_warn "从 $source 下载失败"
+        fi
+    done
+
+    if [[ "$download_success" == "false" ]]; then
+        print_error "从所有镜像源下载 Go 失败"
+        cleanup_temp "$temp_dir"
+        exit 1
+    fi
+
+    print_info "解压 Go..."
     tar -xzf "$go_tarball"
 
     export GOROOT="$temp_dir/go"
     export PATH="$GOROOT/bin:$PATH"
     export GOPATH="$temp_dir/gopath"
 
-    print_info "Go version: $(go version)"
+    print_info "Go 版本: $(go version)"
 }
 
 # Install derper
 install_derper() {
-    print_info "Installing derper from source..."
+    print_info "从源码安装 derper..."
 
-    # Set Go environment for faster downloads in China
-    export GOPROXY="https://proxy.golang.org,direct"
-    export GOSUMDB="sum.golang.org"
+    # Set Go proxy based on environment
+    if [[ "$USE_ALIYUN_INTERNAL" == "true" ]] || is_aliyun_ecs; then
+        print_info "使用阿里云 Go 代理..."
+        export GOPROXY="https://mirrors.aliyun.com/goproxy/,https://goproxy.cn,direct"
+    else
+        export GOPROXY="https://goproxy.cn,https://proxy.golang.org,direct"
+    fi
+    export GOSUMDB="sum.golang.google.cn"
+
+    print_info "Go 代理: $GOPROXY"
 
     if ! go install tailscale.com/cmd/derper@latest; then
-        print_error "Failed to install derper"
-        print_info "Trying with China proxy..."
-        export GOPROXY="https://goproxy.cn,direct"
+        print_error "安装 derper 失败"
+        print_info "尝试使用备用代理..."
+        export GOPROXY="https://goproxy.io,https://mirrors.aliyun.com/goproxy/,direct"
         if ! go install tailscale.com/cmd/derper@latest; then
-            print_error "Failed to install derper from all sources"
+            print_error "从所有源安装 derper 失败"
             exit 1
         fi
     fi
 
-    print_info "Copying derper binary to /usr/local/bin..."
+    print_info "复制 derper 二进制文件到 /usr/local/bin..."
     cp "$GOPATH/bin/derper" /usr/local/bin/derper
     chmod +x /usr/local/bin/derper
 
-    print_info "Derper version: $(/usr/local/bin/derper -version)"
+    print_info "Derper 版本: $(/usr/local/bin/derper -version)"
 }
 
 # Cleanup temporary files
 cleanup_temp() {
     local temp_dir="$1"
-    print_info "Cleaning up temporary files..."
+    print_info "清理临时文件..."
     cd /
     rm -rf "$temp_dir"
 }
@@ -229,16 +296,16 @@ cleanup_temp() {
 # Create derper user
 create_user() {
     if ! id -u derper >/dev/null 2>&1; then
-        print_info "Creating derper user..."
+        print_info "创建 derper 用户..."
         useradd -r -s /bin/false -d /var/lib/derper derper
     else
-        print_info "User 'derper' already exists"
+        print_info "用户 'derper' 已存在"
     fi
 }
 
 # Create necessary directories
 create_directories() {
-    print_info "Creating directories..."
+    print_info "创建必要的目录..."
     mkdir -p "$DERPER_CERTDIR"
     mkdir -p /var/lib/derper
     mkdir -p /var/log/derper
@@ -250,7 +317,7 @@ create_directories() {
 
 # Create configuration file
 create_config() {
-    print_info "Creating configuration file at /etc/default/derper..."
+    print_info "创建配置文件 /etc/default/derper..."
 
     cat > /etc/default/derper << EOF
 # Derper server configuration
@@ -288,7 +355,7 @@ EOF
 
 # Create systemd service
 create_service() {
-    print_info "Creating systemd service..."
+    print_info "创建 systemd 服务..."
 
     cat > /etc/systemd/system/derper.service << 'EOF'
 [Unit]
@@ -346,30 +413,30 @@ EOF
 
 # Enable and start service
 enable_service() {
-    print_info "Reloading systemd daemon..."
+    print_info "重新加载 systemd 守护进程..."
     systemctl daemon-reload
 
-    print_info "Enabling derper service..."
+    print_info "启用 derper 服务..."
     systemctl enable derper
 
-    print_info "Starting derper service..."
+    print_info "启动 derper 服务..."
     systemctl start derper
 
     sleep 2
 
     if systemctl is-active --quiet derper; then
-        print_info "Derper service started successfully!"
+        print_info "Derper 服务启动成功！"
     else
-        print_error "Derper service failed to start. Check logs with: journalctl -u derper -f"
+        print_error "Derper 服务启动失败，请查看日志: journalctl -u derper -f"
         exit 1
     fi
 }
 
 # Show firewall rules
 show_firewall_info() {
-    print_info "Firewall configuration needed:"
+    print_info "防火墙配置说明："
     echo ""
-    echo "  For UFW:"
+    echo "  UFW 防火墙："
     echo "    sudo ufw allow ${DERPER_PORT}/tcp"
     if [[ "$DERPER_HTTP_PORT" != "-1" ]]; then
         echo "    sudo ufw allow ${DERPER_HTTP_PORT}/tcp"
@@ -378,7 +445,7 @@ show_firewall_info() {
         echo "    sudo ufw allow ${DERPER_STUN_PORT}/udp"
     fi
     echo ""
-    echo "  For firewalld:"
+    echo "  firewalld 防火墙："
     echo "    sudo firewall-cmd --permanent --add-port=${DERPER_PORT}/tcp"
     if [[ "$DERPER_HTTP_PORT" != "-1" ]]; then
         echo "    sudo firewall-cmd --permanent --add-port=${DERPER_HTTP_PORT}/tcp"
@@ -388,38 +455,47 @@ show_firewall_info() {
     fi
     echo "    sudo firewall-cmd --reload"
     echo ""
+    echo "  阿里云安全组："
+    echo "    需要在控制台开放 TCP ${DERPER_PORT}"
+    if [[ "$DERPER_HTTP_PORT" != "-1" ]]; then
+        echo "    需要在控制台开放 TCP ${DERPER_HTTP_PORT}"
+    fi
+    if [[ "$DERPER_STUN" == "true" ]]; then
+        echo "    需要在控制台开放 UDP ${DERPER_STUN_PORT}"
+    fi
+    echo ""
 }
 
 # Show final information
 show_final_info() {
     echo ""
-    print_info "===== Installation Complete ====="
+    print_info "===== 安装完成 ====="
     echo ""
-    echo "Derper has been installed and started successfully!"
+    echo "Derper 已成功安装并启动！"
     echo ""
-    echo "Configuration file: /etc/default/derper"
-    echo "Service status: systemctl status derper"
-    echo "View logs: journalctl -u derper -f"
+    echo "配置文件: /etc/default/derper"
+    echo "服务状态: systemctl status derper"
+    echo "查看日志: journalctl -u derper -f"
     echo ""
 
     if [[ -n "$DERPER_HOSTNAME" ]]; then
-        echo "Server hostname: $DERPER_HOSTNAME"
+        echo "服务器域名: $DERPER_HOSTNAME"
     fi
-    echo "HTTPS port: $DERPER_PORT"
+    echo "HTTPS 端口: $DERPER_PORT"
     if [[ "$DERPER_HTTP_PORT" != "-1" ]]; then
-        echo "HTTP port: $DERPER_HTTP_PORT"
+        echo "HTTP 端口: $DERPER_HTTP_PORT"
     fi
     if [[ "$DERPER_STUN" == "true" ]]; then
-        echo "STUN port: $DERPER_STUN_PORT (UDP)"
+        echo "STUN 端口: $DERPER_STUN_PORT (UDP)"
     fi
     echo ""
 
     show_firewall_info
 
     echo ""
-    echo "To reconfigure derper:"
-    echo "  1. Edit /etc/default/derper"
-    echo "  2. Run: systemctl restart derper"
+    echo "重新配置 derper:"
+    echo "  1. 编辑 /etc/default/derper"
+    echo "  2. 运行: systemctl restart derper"
     echo ""
 }
 
@@ -427,7 +503,7 @@ show_final_info() {
 main() {
     parse_args "$@"
 
-    print_info "Starting Derper installation..."
+    print_info "开始安装 Derper..."
     echo ""
 
     check_root
