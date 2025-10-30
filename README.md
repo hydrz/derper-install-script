@@ -621,18 +621,17 @@ curl -fsSL https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh
 
 ```bash
 # 1. 生成自签名证书
-sudo mkdir -p /var/lib/derper/certs/derp.example.com
-cd /var/lib/derper/certs/derp.example.com
+mkdir -p /var/lib/derper/certs
+export DERPER_HOSTNAME=derp.example.com
 
-sudo openssl req -x509 -newkey rsa:4096 -nodes \
-  -keyout derp.example.com.key \
-  -out derp.example.com.crt \
-  -days 365 \
-  -subj "/CN=derp.example.com"
+openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
+  -keyout /var/lib/derper/certs/${DERPER_HOSTNAME}.key -out /var/lib/derper/certs/${DERPER_HOSTNAME}.crt \
+	-subj "/CN=${DERPER_HOSTNAME}" -addext "subjectAltName=DNS:${DERPER_HOSTNAME}"
 
 # 2. 设置权限
 sudo chown -R derper:derper /var/lib/derper/certs
-sudo chmod 600 /var/lib/derper/certs/derp.example.com/*.key
+sudo chmod 600 /var/lib/derper/certs/*.key
+sudo chmod 644 /var/lib/derper/certs/*.cert
 
 # 3. 安装（手动证书模式）
 curl -fsSL https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh | \
