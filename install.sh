@@ -163,8 +163,6 @@ is_aliyun_ecs() {
 
 # Get latest Go version from official website
 get_latest_go_version() {
-    print_info "获取最新 Go 版本..."
-
     # Try to get the latest stable version from Go download page
     local version=$(curl -sL --max-time 10 https://golang.google.cn/VERSION?m=text 2>/dev/null | head -n1)
 
