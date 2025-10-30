@@ -18,6 +18,9 @@ DERPER_STUN="true"
 DERPER_VERIFY_CLIENTS="false"
 DERPER_EXTRA_ARGS=""
 USE_ALIYUN_INTERNAL="false"
+INSTALL_TAILSCALED="false"
+TAILSCALE_VERSION="latest"
+DERPER_VERSION="latest"
 
 # Print colored message
 print_info() {
@@ -35,34 +38,45 @@ print_error() {
 # Show usage
 usage() {
     cat << EOF
-Usage: $0 [OPTIONS]
+使用方法: $0 [选项]
 
-Install Derper server and configure it as a systemd service.
+安装 Derper 服务器并配置为 systemd 服务。
 
-OPTIONS:
-    -h, --help                  Show this help message
-    --port PORT                 HTTPS listen port (default: 443)
-    --http-port PORT            HTTP port (default: 80)
-    --stun-port PORT            STUN UDP port (default: 3478)
-    --hostname HOSTNAME         Server hostname for LetsEncrypt
-	--workdir DIR               Working directory, will create derper.key here and contain certs (default: /var/lib/derper)
-    --certmode MODE             Certificate mode: letsencrypt or manual (default: letsencrypt)
-    --no-stun                   Disable STUN server
-    --verify-clients            Enable client verification through local tailscaled
-    --extra-args "ARGS"         Additional arguments to pass to derper
-    --aliyun-internal           Use Aliyun ECS internal mirror (mirrors.cloud.aliyuncs.com)
+选项:
+    -h, --help                  显示帮助信息
+    --port PORT                 HTTPS 监听端口 (默认: 443)
+    --http-port PORT            HTTP 端口 (默认: 80)
+    --stun-port PORT            STUN UDP 端口 (默认: 3478)
+    --hostname HOSTNAME         LetsEncrypt 域名
+    --workdir DIR               工作目录，存储 derper.key 和证书 (默认: /var/lib/derper)
+    --certmode MODE             证书模式: letsencrypt 或 manual (默认: letsencrypt)
+    --no-stun                   禁用 STUN 服务器
+    --verify-clients            启用客户端验证（需要本地 tailscaled）
+    --extra-args "ARGS"         传递给 derper 的额外参数
+    --aliyun-internal           使用阿里云 ECS 内网镜像 (mirrors.cloud.aliyuncs.com)
+    --install-tailscaled        同时安装 tailscaled
+    -v VER                      指定 Derper 与 Tailscale 版本 (默认: latest)
 
-EXAMPLES:
-    # Basic installation with LetsEncrypt
+示例:
+    # 基础安装，使用 LetsEncrypt
     $0 --hostname derp.example.com
 
-    # Installation on Aliyun ECS (use internal mirror)
+    # 在阿里云 ECS 上安装（使用内网镜像）
     $0 --hostname derp.example.com --aliyun-internal
 
-    # Manual certificate mode
+    # 安装指定版本的 derper
+    $0 --hostname derp.example.com -v 1.90.4
+
+    # 同时安装 tailscaled
+    $0 --hostname derp.example.com --install-tailscaled
+
+    # 安装指定版本的 tailscaled 和 derper
+    $0 --hostname derp.example.com --install-tailscaled -v 1.90.4
+
+    # 手动证书模式
     $0 --hostname derp.example.com --certmode manual --port 8443
 
-    # Disable STUN and use custom ports
+    # 禁用 STUN 并使用自定义端口
     $0 --hostname derp.example.com --no-stun --port 8443 --http-port 8080
 
 EOF
@@ -92,10 +106,10 @@ parse_args() {
                 DERPER_HOSTNAME="$2"
                 shift 2
                 ;;
-			--workdir)
-				DERPER_WORKDIR="$2"
-				shift 2
-				;;
+            --workdir)
+                DERPER_WORKDIR="$2"
+                shift 2
+                ;;
             --certmode)
                 DERPER_CERTMODE="$2"
                 shift 2
@@ -116,8 +130,17 @@ parse_args() {
                 USE_ALIYUN_INTERNAL="true"
                 shift
                 ;;
+            --install-tailscaled)
+                INSTALL_TAILSCALED="true"
+                shift
+                ;;
+			 -v)
+				DERPER_VERSION="$2"
+				TAILSCALE_VERSION="$2"
+				shift 2
+				;;
             *)
-                print_error "Unknown option: $1"
+                print_error "未知选项: $1"
                 usage
                 ;;
         esac
@@ -127,7 +150,7 @@ parse_args() {
 # Check if running as root
 check_root() {
     if [[ $EUID -ne 0 ]]; then
-        print_error "This script must be run as root"
+        print_error "此脚本必须以 root 权限运行"
         exit 1
     fi
 }
@@ -146,7 +169,7 @@ detect_arch() {
             echo "arm"
             ;;
         *)
-            print_error "Unsupported architecture: $arch"
+            print_error "不支持的架构: $arch"
             exit 1
             ;;
     esac
@@ -154,22 +177,19 @@ detect_arch() {
 
 # Check if running on Aliyun ECS
 is_aliyun_ecs() {
-    # Check if we can access Aliyun metadata service
     if timeout 2 curl -s http://100.100.100.200/latest/meta-data/instance-id >/dev/null 2>&1; then
         return 0
     fi
     return 1
 }
 
-# Get latest Go version from official website
+# Get latest Go version
 get_latest_go_version() {
-    # Try to get the latest stable version from Go download page
     local version=$(curl -sL --max-time 10 https://golang.google.cn/VERSION?m=text 2>/dev/null | head -n1)
 
     if [[ -z "$version" ]]; then
-        echo "1.25.3"
+        echo "1.23.4"
     else
-        # Remove "go" prefix if present
         version="${version#go}"
         echo "$version"
     fi
@@ -189,7 +209,6 @@ setup_temp_go() {
 
     print_info "下载 Go ${go_version} for ${arch}..."
 
-    # Determine download sources based on environment
     local download_sources=()
 
     if [[ "$USE_ALIYUN_INTERNAL" == "true" ]]; then
@@ -215,7 +234,6 @@ setup_temp_go() {
         )
     fi
 
-    # Try each download source
     for source in "${download_sources[@]}"; do
         print_info "尝试从 $source 下载..."
         if wget -q --show-progress --timeout=30 --tries=2 "$source"; then
@@ -243,11 +261,8 @@ setup_temp_go() {
     print_info "Go 版本: $(go version)"
 }
 
-# Install derper
-install_derper() {
-    print_info "从源码安装 derper..."
-
-    # Set Go proxy based on environment
+# Set Go proxy
+set_go_proxy() {
     if [[ "$USE_ALIYUN_INTERNAL" == "true" ]] || is_aliyun_ecs; then
         print_info "使用阿里云 Go 代理..."
         export GOPROXY="https://mirrors.aliyun.com/goproxy/,https://goproxy.cn,direct"
@@ -255,14 +270,28 @@ install_derper() {
         export GOPROXY="https://goproxy.cn,https://proxy.golang.org,direct"
     fi
     export GOSUMDB="sum.golang.google.cn"
-
     print_info "Go 代理: $GOPROXY"
+}
 
-    if ! go install tailscale.com/cmd/derper@latest; then
+# Install derper
+install_derper() {
+    print_info "从源码安装 derper..."
+
+    set_go_proxy
+
+    local version_suffix=""
+    if [[ "$DERPER_VERSION" != "latest" ]]; then
+        version_suffix="@v${DERPER_VERSION}"
+        print_info "安装 derper 版本: ${DERPER_VERSION}"
+    else
+        print_info "安装最新版本的 derper"
+    fi
+
+    if ! go install "tailscale.com/cmd/derper${version_suffix}"; then
         print_error "安装 derper 失败"
         print_info "尝试使用备用代理..."
         export GOPROXY="https://goproxy.io,https://mirrors.aliyun.com/goproxy/,direct"
-        if ! go install tailscale.com/cmd/derper@latest; then
+        if ! go install "tailscale.com/cmd/derper${version_suffix}"; then
             print_error "从所有源安装 derper 失败"
             exit 1
         fi
@@ -273,6 +302,98 @@ install_derper() {
     chmod +x /usr/local/bin/derper
 
     print_info "Derper 版本: $(/usr/local/bin/derper -version)"
+}
+
+# Install tailscaled
+install_tailscaled() {
+    if [[ "$INSTALL_TAILSCALED" != "true" ]]; then
+        return
+    fi
+
+    print_info "安装 tailscaled..."
+
+    set_go_proxy
+
+    local version_suffix=""
+    if [[ "$TAILSCALE_VERSION" != "latest" ]]; then
+        version_suffix="@v${TAILSCALE_VERSION}"
+        print_info "安装 tailscale 版本: ${TAILSCALE_VERSION}"
+    else
+        print_info "安装最新版本的 tailscale"
+    fi
+
+    # Install tailscale and tailscaled
+    if ! go install "tailscale.com/cmd/tailscale${version_suffix}"; then
+        print_error "安装 tailscale 失败"
+        print_info "尝试使用备用代理..."
+        export GOPROXY="https://goproxy.io,https://mirrors.aliyun.com/goproxy/,direct"
+        if ! go install "tailscale.com/cmd/tailscale${version_suffix}"; then
+            print_error "从所有源安装 tailscale 失败"
+            exit 1
+        fi
+    fi
+
+    if ! go install "tailscale.com/cmd/tailscaled${version_suffix}"; then
+        print_error "安装 tailscaled 失败"
+        exit 1
+    fi
+
+    print_info "复制 tailscale 和 tailscaled 二进制文件..."
+    cp "$GOPATH/bin/tailscale" /usr/local/bin/tailscale
+    cp "$GOPATH/bin/tailscaled" /usr/local/bin/tailscaled
+    chmod +x /usr/local/bin/tailscale
+    chmod +x /usr/local/bin/tailscaled
+
+    print_info "Tailscale 版本: $(/usr/local/bin/tailscale version)"
+
+    # Create tailscaled systemd service
+    create_tailscaled_service
+}
+
+# Create tailscaled systemd service
+create_tailscaled_service() {
+    print_info "创建 tailscaled systemd 服务..."
+
+    mkdir -p /var/lib/tailscale
+
+    cat > /lib/systemd/system/tailscaled.service << 'EOF'
+[Unit]
+Description=Tailscale node agent
+Documentation=https://tailscale.com/kb/
+Wants=network-pre.target
+After=network-pre.target NetworkManager.service systemd-resolved.service
+
+[Service]
+EnvironmentFile=/etc/default/tailscaled
+ExecStart=/usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=${PORT} $FLAGS
+ExecStopPost=/usr/sbin/tailscaled --cleanup
+
+Restart=on-failure
+
+RuntimeDirectory=tailscale
+RuntimeDirectoryMode=0755
+StateDirectory=tailscale
+StateDirectoryMode=0700
+CacheDirectory=tailscale
+CacheDirectoryMode=0750
+Type=notify
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    chmod 644 /lib/systemd/system/tailscaled.service
+
+    systemctl daemon-reload
+    systemctl enable tailscaled
+    systemctl start tailscaled
+
+    if systemctl is-active --quiet tailscaled; then
+        print_info "Tailscaled 服务启动成功！"
+        print_info "使用 'tailscale up' 连接到 Tailscale 网络"
+    else
+        print_warn "Tailscaled 服务启动失败，请检查日志: journalctl -u tailscaled -f"
+    fi
 }
 
 # Cleanup temporary files
@@ -287,7 +408,7 @@ cleanup_temp() {
 create_user() {
     if ! id -u derper >/dev/null 2>&1; then
         print_info "创建 derper 用户..."
-        useradd -r -s /bin/false -d /var/lib/derper derper
+        useradd -r -s /bin/false -d "$DERPER_WORKDIR" derper
     else
         print_info "用户 'derper' 已存在"
     fi
@@ -296,10 +417,12 @@ create_user() {
 # Create necessary directories
 create_directories() {
     print_info "创建必要的目录..."
-    mkdir -p /var/lib/derper
-    mkdir -p /var/log/derper/{certs,secrets}
+    mkdir -p "$DERPER_WORKDIR"
+    mkdir -p "$DERPER_WORKDIR/certs"
+    mkdir -p "$DERPER_WORKDIR/secrets"
+    mkdir -p /var/log/derper
 
-    chown -R derper:derper /var/lib/derper
+    chown -R derper:derper "$DERPER_WORKDIR"
     chown -R derper:derper /var/log/derper
 }
 
@@ -310,6 +433,7 @@ create_config() {
     cat > /etc/default/derper << EOF
 # Derper server configuration
 # Generated on $(date)
+# User: ${SUDO_USER:-root}
 
 # Server listen address and port
 DERPER_ADDR=":${DERPER_PORT}"
@@ -345,7 +469,7 @@ EOF
 create_service() {
     print_info "创建 systemd 服务..."
 
-    cat > /etc/systemd/system/derper.service << 'EOF'
+    cat > /lib/systemd/system/derper.service << 'EOF'
 [Unit]
 Description=Tailscale DERP Server
 After=network.target
@@ -366,10 +490,10 @@ ExecStart=/bin/bash -c 'exec /usr/local/bin/derper \
     ${DERPER_HOSTNAME:+-hostname "${DERPER_HOSTNAME}"} \
     -certmode "${DERPER_CERTMODE}" \
     -certdir "${DERPER_WORKDIR}/certs" \
-	-secrets-cache-dir "${DERPER_WORKDIR}/secrets" \
+    -secrets-cache-dir "${DERPER_WORKDIR}/secrets" \
     ${DERPER_VERIFY_CLIENTS:+-verify-clients="${DERPER_VERIFY_CLIENTS}"} \
-    ${DERPER_EXTRA_ARGS} \'
-	-c ${DERPER_WORKDIR}/derper.key'
+    ${DERPER_EXTRA_ARGS} \
+    -c ${DERPER_WORKDIR}/derper.key'
 
 # Restart policy
 Restart=always
@@ -380,7 +504,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/derper /var/log/derper
+ReadWritePaths=${DERPER_WORKDIR} /var/log/derper
 
 # Capabilities
 AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -398,7 +522,7 @@ SyslogIdentifier=derper
 WantedBy=multi-user.target
 EOF
 
-    chmod 644 /etc/systemd/system/derper.service
+    chmod 644 /lib/systemd/system/derper.service
 }
 
 # Enable and start service
@@ -434,6 +558,9 @@ show_firewall_info() {
     if [[ "$DERPER_STUN" == "true" ]]; then
         echo "    sudo ufw allow ${DERPER_STUN_PORT}/udp"
     fi
+    if [[ "$INSTALL_TAILSCALED" == "true" ]]; then
+        echo "    sudo ufw allow 41641/udp  # Tailscale"
+    fi
     echo ""
     echo "  firewalld 防火墙："
     echo "    sudo firewall-cmd --permanent --add-port=${DERPER_PORT}/tcp"
@@ -442,6 +569,9 @@ show_firewall_info() {
     fi
     if [[ "$DERPER_STUN" == "true" ]]; then
         echo "    sudo firewall-cmd --permanent --add-port=${DERPER_STUN_PORT}/udp"
+    fi
+    if [[ "$INSTALL_TAILSCALED" == "true" ]]; then
+        echo "    sudo firewall-cmd --permanent --add-port=41641/udp  # Tailscale"
     fi
     echo "    sudo firewall-cmd --reload"
     echo ""
@@ -452,6 +582,9 @@ show_firewall_info() {
     fi
     if [[ "$DERPER_STUN" == "true" ]]; then
         echo "    需要在控制台开放 UDP ${DERPER_STUN_PORT}"
+    fi
+    if [[ "$INSTALL_TAILSCALED" == "true" ]]; then
+        echo "    需要在控制台开放 UDP 41641 (Tailscale)"
     fi
     echo ""
 }
@@ -464,6 +597,7 @@ show_final_info() {
     echo "Derper 已成功安装并启动！"
     echo ""
     echo "配置文件: /etc/default/derper"
+    echo "工作目录: $DERPER_WORKDIR"
     echo "服务状态: systemctl status derper"
     echo "查看日志: journalctl -u derper -f"
     echo ""
@@ -478,6 +612,16 @@ show_final_info() {
     if [[ "$DERPER_STUN" == "true" ]]; then
         echo "STUN 端口: $DERPER_STUN_PORT (UDP)"
     fi
+
+    if [[ "$INSTALL_TAILSCALED" == "true" ]]; then
+        echo ""
+        echo "Tailscaled 已安装："
+        echo "  服务状态: systemctl status tailscaled"
+        echo "  连接网络: tailscale up"
+        echo "  查看状态: tailscale status"
+        echo "  查看日志: journalctl -u tailscaled -f"
+    fi
+
     echo ""
 
     show_firewall_info
@@ -494,6 +638,9 @@ main() {
     parse_args "$@"
 
     print_info "开始安装 Derper..."
+    if [[ "$INSTALL_TAILSCALED" == "true" ]]; then
+        print_info "同时安装 Tailscaled..."
+    fi
     echo ""
 
     check_root
@@ -503,6 +650,7 @@ main() {
     # Setup and install
     setup_temp_go
     install_derper
+    install_tailscaled
 
     # Cleanup Go installation
     cleanup_temp "$temp_dir"
