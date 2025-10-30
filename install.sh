@@ -175,8 +175,8 @@ setup_temp_go() {
     print_info "Downloading Go ${go_version} for ${arch}..."
     if ! wget -q --show-progress "https://go.dev/dl/${go_tarball}"; then
         print_error "Failed to download Go ${go_version}"
-        print_info "Trying to download from Google CDN..."
-        if ! wget -q --show-progress "https://golang.google.cn/dl/${go_tarball}"; then
+        print_info "Trying to download from Aliyun mirror..."
+        if ! wget -q --show-progress "https://mirrors.aliyun.com/golang/${go_tarball}"; then
             print_error "Failed to download Go from all sources"
             cleanup_temp "$temp_dir"
             exit 1
