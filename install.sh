@@ -28,21 +28,73 @@ DERPER_VERSION="latest"
 UNINSTALL_MODE="false"
 KEEP_DATA="false"
 
+# Check if output is to a terminal
+if [ -t 1 ]; then
+    # Terminal output - use colors
+    USE_COLOR=true
+else
+    # Pipe or redirect - no colors
+    USE_COLOR=false
+    RED=''
+    GREEN=''
+    YELLOW=''
+    BLUE=''
+    NC=''
+fi
+
 # Print colored message
 print_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
+    if [ "$USE_COLOR" = true ]; then
+        echo -e "${GREEN}[INFO]${NC} $1"
+    else
+        echo "[INFO] $1"
+    fi
 }
 
 print_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
+    if [ "$USE_COLOR" = true ]; then
+        echo -e "${YELLOW}[WARN]${NC} $1"
+    else
+        echo "[WARN] $1"
+    fi
 }
 
 print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    if [ "$USE_COLOR" = true ]; then
+        echo -e "${RED}[ERROR]${NC} $1"
+    else
+        echo "[ERROR] $1"
+    fi
 }
 
 print_step() {
-    echo -e "${BLUE}[STEP]${NC} $1"
+    if [ "$USE_COLOR" = true ]; then
+        echo -e "${BLUE}[STEP]${NC} $1"
+    else
+        echo "[STEP] $1"
+    fi
+}
+
+# Print colored text (for inline colors)
+print_color() {
+    local color=$1
+    local text=$2
+    if [ "$USE_COLOR" = true ]; then
+        echo -ne "${color}${text}${NC}"
+    else
+        echo -n "$text"
+    fi
+}
+
+# Print colored line
+print_line() {
+    local color=$1
+    local text=$2
+    if [ "$USE_COLOR" = true ]; then
+        echo -e "${color}${text}${NC}"
+    else
+        echo "$text"
+    fi
 }
 
 # Show banner
@@ -56,8 +108,8 @@ show_banner() {
                /_/
 
 EOF
-    echo -e "${GREEN}Derper 安装脚本 v${VERSION}${NC}"
-    echo -e "${BLUE}https://github.com/hydrz/derper-install-script${NC}"
+    print_line "$GREEN" "Derper 安装脚本 v${VERSION}"
+    print_line "$BLUE" "https://github.com/hydrz/derper-install-script"
     echo ""
 }
 
@@ -456,7 +508,7 @@ setup_temp_go() {
 set_go_proxy() {
     if [[ "$USE_ALIYUN_INTERNAL" == "true" ]] || is_aliyun_ecs; then
         print_info "使用阿里云 Go 代理..."
-        export GOPROXY="https://mirrors.aliyun.com/goproxy/,https://goproxy.cn,direct"
+        export GOPROXY="http://mirrors.cloud.aliyuncs.com/goproxy/,https://goproxy.cn,direct"
     else
         export GOPROXY="https://goproxy.cn,https://proxy.golang.org,direct"
     fi
@@ -762,7 +814,7 @@ show_firewall_info() {
     echo ""
     echo "请根据您的防火墙类型选择以下命令："
     echo ""
-    echo "${YELLOW}UFW 防火墙:${NC}"
+    print_line "$YELLOW" "UFW 防火墙:"
     echo "  sudo ufw allow ${DERPER_PORT}/tcp"
     if [[ "$DERPER_HTTP_PORT" != "-1" ]]; then
         echo "  sudo ufw allow ${DERPER_HTTP_PORT}/tcp"
@@ -774,7 +826,7 @@ show_firewall_info() {
         echo "  sudo ufw allow 41641/udp"
     fi
     echo ""
-    echo "${YELLOW}firewalld 防火墙:${NC}"
+    print_line "$YELLOW" "firewalld 防火墙:"
     echo "  sudo firewall-cmd --permanent --add-port=${DERPER_PORT}/tcp"
     if [[ "$DERPER_HTTP_PORT" != "-1" ]]; then
         echo "  sudo firewall-cmd --permanent --add-port=${DERPER_HTTP_PORT}/tcp"
@@ -787,7 +839,7 @@ show_firewall_info() {
     fi
     echo "  sudo firewall-cmd --reload"
     echo ""
-    echo "${YELLOW}阿里云/腾讯云安全组:${NC}"
+    print_line "$YELLOW" "阿里云/腾讯云安全组:"
     echo "  需要在云控制台开放以下端口："
     echo "  - TCP ${DERPER_PORT}"
     if [[ "$DERPER_HTTP_PORT" != "-1" ]]; then
@@ -810,51 +862,51 @@ show_final_info() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 
-    echo "${GREEN}📋 服务信息:${NC}"
-    echo "  服务器域名: ${BLUE}${DERPER_HOSTNAME}${NC}"
-    echo "  HTTPS 端口: ${BLUE}${DERPER_PORT}${NC}"
+    print_line "$GREEN" "📋 服务信息:"
+    echo "  服务器域名: ${DERPER_HOSTNAME}"
+    echo "  HTTPS 端口: ${DERPER_PORT}"
     if [[ "$DERPER_HTTP_PORT" != "-1" ]]; then
-        echo "  HTTP 端口:  ${BLUE}${DERPER_HTTP_PORT}${NC}"
+        echo "  HTTP 端口:  ${DERPER_HTTP_PORT}"
     fi
     if [[ "$DERPER_STUN" == "true" ]]; then
-        echo "  STUN 端口:  ${BLUE}${DERPER_STUN_PORT}${NC} (UDP)"
+        echo "  STUN 端口:  ${DERPER_STUN_PORT} (UDP)"
     fi
     echo ""
 
-    echo "${GREEN}📁 文件位置:${NC}"
-    echo "  配置文件: ${BLUE}/etc/default/derper${NC}"
-    echo "  工作目录: ${BLUE}${DERPER_WORKDIR}${NC}"
-    echo "  日志目录: ${BLUE}/var/log/derper${NC}"
+    print_line "$GREEN" "📁 文件位置:"
+    echo "  配置文件: /etc/default/derper"
+    echo "  工作目录: ${DERPER_WORKDIR}"
+    echo "  日志目录: /var/log/derper"
     echo ""
 
-    echo "${GREEN}🔧 常用命令:${NC}"
-    echo "  查看状态: ${BLUE}systemctl status derper${NC}"
-    echo "  查看日志: ${BLUE}journalctl -u derper -f${NC}"
-    echo "  重启服务: ${BLUE}systemctl restart derper${NC}"
-    echo "  停止服务: ${BLUE}systemctl stop derper${NC}"
+    print_line "$GREEN" "🔧 常用命令:"
+    echo "  查看状态: systemctl status derper"
+    echo "  查看日志: journalctl -u derper -f"
+    echo "  重启服务: systemctl restart derper"
+    echo "  停止服务: systemctl stop derper"
     echo ""
 
     if [[ "$INSTALL_TAILSCALED" == "true" ]]; then
-        echo "${GREEN}🌐 Tailscaled 信息:${NC}"
-        echo "  查看状态: ${BLUE}systemctl status tailscaled${NC}"
-        echo "  连接网络: ${BLUE}tailscale up${NC}"
-        echo "  查看状态: ${BLUE}tailscale status${NC}"
-        echo "  查看 IP:  ${BLUE}tailscale ip${NC}"
+        print_line "$GREEN" "🌐 Tailscaled 信息:"
+        echo "  查看状态: systemctl status tailscaled"
+        echo "  连接网络: tailscale up"
+        echo "  查看状态: tailscale status"
+        echo "  查看 IP:  tailscale ip"
         echo ""
     fi
 
     show_firewall_info
 
-    echo "${GREEN}📖 更多信息:${NC}"
+    print_line "$GREEN" "📖 更多信息:"
     echo "  重新配置:"
-    echo "    1. 编辑配置文件: ${BLUE}sudo nano /etc/default/derper${NC}"
-    echo "    2. 重启服务: ${BLUE}sudo systemctl restart derper${NC}"
+    echo "    1. 编辑配置文件: sudo nano /etc/default/derper"
+    echo "    2. 重启服务: sudo systemctl restart derper"
     echo ""
     echo "  卸载服务:"
-    echo "    ${BLUE}curl -fsSL https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh | sudo bash -s - --uninstall${NC}"
+    echo "    curl -fsSL https://fastly.jsdelivr.net/gh/hydrz/derper-install-script/install.sh | sudo bash -s - --uninstall"
     echo ""
     echo "  文档和支持:"
-    echo "    GitHub: ${BLUE}https://github.com/hydrz/derper-install-script${NC}"
+    echo "    GitHub: https://github.com/hydrz/derper-install-script"
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
